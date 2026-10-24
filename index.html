@@ -1,0 +1,585 @@
+<title>Story Tree Planner</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#f4f1ea">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: header, toolbar, then a scrolling stage where the tree grows downwards.
+   Palette: paper and ink with one warm accent; endings in green. */
+:root {
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --panel: #fffdf8;
+  --ink: #1f1b16;
+  --mute: #77706a;
+  --line: #d6cfbf;
+  --accent: #8a5a2b;
+  --accent-soft: #eee2cf;
+  --end: #2f7a52;
+  --end-soft: #e2f0e6;
+  --warn: #a4262c;
+  --sans: "DM Sans", system-ui, sans-serif;
+  --serif: "Newsreader", Georgia, serif;
+  --mono: "DM Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #171511; --panel: #211e18; --ink: #ece6da; --mute: #9a9284; --line: #3b362c;
+    --accent: #d9a86a; --accent-soft: #3a2f20; --end: #7fcf9a; --end-soft: #1f3327; --warn: #ff8a8f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #171511; --panel: #211e18; --ink: #ece6da; --mute: #9a9284; --line: #3b362c;
+  --accent: #d9a86a; --accent-soft: #3a2f20; --end: #7fcf9a; --end-soft: #1f3327; --warn: #ff8a8f;
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 var(--sans);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 14px;
+}
+button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+header { flex: none; }
+h1 { margin: 0; font: italic 400 28px/1.1 var(--serif); }
+.hint { margin: 4px 0 0; color: var(--mute); font-size: 13px; text-wrap: pretty; }
+
+.toolbar { flex: none; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tb {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  padding: 7px 13px; font-size: 13px;
+}
+.tb:disabled { opacity: .4; cursor: default; }
+.tb.on { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.tb.danger { color: var(--warn); border-color: var(--warn); }
+.tb.primary { background: var(--accent-soft); border-color: transparent; }
+.spacer { flex: 1 1 auto; }
+
+.status { flex: none; min-height: 1.4em; margin: 0; font: 13px/1.4 var(--mono); color: var(--mute); }
+.status.err { color: var(--warn); }
+
+.stage {
+  flex: 1 1 auto; min-height: 260px; min-width: 0;
+  overflow: auto; position: relative;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+}
+.canvas { position: relative; }
+.canvas svg { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.edge { fill: none; stroke: var(--line); stroke-width: 2; }
+.edge.hot { stroke: var(--accent); stroke-width: 2.5; }
+.edge.hot-end { stroke: var(--end); stroke-width: 2.5; }
+
+.node {
+  position: absolute;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
+  transition: border-color .15s, box-shadow .15s;
+}
+.node.kind-player { background: var(--accent-soft); }
+.node.kind-end { background: var(--end-soft); border-color: var(--end); }
+.node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.node.target { border-style: dashed; border-color: var(--accent); }
+.node.target:hover { background: var(--accent-soft); }
+.node-kind {
+  font: 500 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--mute);
+}
+.kind-player .node-kind { color: var(--accent); }
+.kind-end .node-kind { color: var(--end); }
+.node textarea {
+  flex: 1 1 auto; min-height: 0; resize: none; border: 0; background: transparent;
+  color: var(--ink); font-size: 13px; line-height: 1.35; padding: 0; outline: none;
+  width: 100%;
+}
+.node textarea::placeholder { color: var(--mute); }
+.node.drag-ok { cursor: pointer; }
+
+.sheet-wrap {
+  position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.sheet {
+  width: min(560px, 100%); max-height: 100%; display: flex; flex-direction: column; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+}
+.sheet h2 { margin: 0; font: italic 400 22px var(--serif); }
+.sheet p { margin: 0; color: var(--mute); font-size: 13px; }
+.sheet textarea {
+  min-height: 220px; flex: 1 1 auto; resize: vertical;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  font: 12px/1.45 var(--mono); color: var(--ink);
+}
+.sheet .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.tb { touch-action: manipulation; }
+
+/* Phone: the toolbar becomes a thumb-reach strip at the bottom */
+@media (max-width: 560px) {
+  body { gap: 8px; }
+  h1 { font-size: 22px; }
+  .hint { display: none; }
+  header { order: 0; }
+  .stage { order: 1; min-height: 0; }
+  .status { order: 2; min-height: 0; }
+  .toolbar {
+    order: 3; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    margin: 0 -16px; padding: 2px 16px 4px; -webkit-overflow-scrolling: touch;
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .toolbar .spacer { display: none; }
+  .tb { flex: none; min-height: 44px; padding: 10px 14px; }
+  .node textarea, .sheet textarea { font-size: 16px; }
+  .sheet-wrap { padding: 0; }
+  .sheet { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) { .node { transition: none; } }
+</style>
+
+<header>
+  <h1>Story Tree</h1>
+  <p class="hint">Tap a box to edit it. Link joins two boxes so different replies can lead to the same place. The tree grows downwards.</p>
+</header>
+
+<div class="toolbar" role="toolbar" aria-label="Tree tools">
+  <button class="tb" data-act="add" data-kind="colleague">+ Colleague line</button>
+  <button class="tb" data-act="add" data-kind="player">+ Stefan's reply</button>
+  <button class="tb" data-act="add" data-kind="end">+ Ending</button>
+  <button class="tb" data-act="kind">Change kind</button>
+  <button class="tb" data-act="link">Link</button>
+  <span class="spacer"></span>
+  <button class="tb danger" data-act="delete">Delete</button>
+  <button class="tb primary" data-act="io">Save / load</button>
+</div>
+
+<p class="status" id="status" aria-live="polite"></p>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+    <svg id="edges" aria-hidden="true">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+</div>
+
+<div class="sheet-wrap" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <h2 id="sheet-title">Save / load</h2>
+    <p>Copy this text to keep your tree. Paste a saved copy here and press Load to restore it.</p>
+    <textarea id="sheet-text" spellcheck="false" aria-label="Tree as text"></textarea>
+    <div class="row">
+      <button class="tb" data-act="copy">Copy</button>
+      <button class="tb" data-act="load">Load this text</button>
+      <button class="tb primary" data-act="close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var KIND_LABEL = { colleague: "Colleague", player: "Stefan", end: "Ending" };
+var KIND_NEXT = { colleague: "player", player: "end", end: "colleague" };
+var NW = 200, NH = 112, GX = 36, GY = 64, PAD = 24;
+function sizeNodes() {
+  var phone = window.innerWidth < 560;
+  NW = phone ? 168 : 200;
+  NH = phone ? 120 : 112;
+  GX = phone ? 28 : 36;
+}
+function reveal(id) {
+  var el = document.querySelector('.node[data-id="' + id + '"]');
+  if (el) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+var STORE_KEY = "story-tree-v1";
+
+var data = null, selected = null, linkFrom = null, pendingDelete = false;
+
+function starter() {
+  // Example text only. Replace or delete these boxes.
+  return {
+    root: "a",
+    nodes: {
+      a: { id: "a", kind: "colleague", text: "Example: The colleague opens with a comment about Stefan's shirt.", children: ["b", "c"] },
+      b: { id: "b", kind: "player", text: "Example: Thank you. It was a gift.", children: ["d"] },
+      c: { id: "c", kind: "player", text: "Example: Ha, it's from the market, actually.", children: ["d"] },
+      d: { id: "d", kind: "colleague", text: "Example: Shall we get a drink later?", children: ["e"] },
+      e: { id: "e", kind: "end", text: "Example: Ending. The date.", children: [] }
+    }
+  };
+}
+
+function load() {
+  try {
+    var raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      var d = JSON.parse(raw);
+      if (d && d.nodes && d.nodes[d.root]) {
+        // Older saves used "stefan" and "you" for the two speakers.
+        var rename = { stefan: "colleague", you: "player" };
+        Object.keys(d.nodes).forEach(function (k) {
+          if (rename[d.nodes[k].kind]) d.nodes[k].kind = rename[d.nodes[k].kind];
+        });
+        return d;
+      }
+    }
+  } catch (err) {}
+  return starter();
+}
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch (err) {}
+}
+
+function setStatus(msg, isErr) {
+  var s = document.getElementById("status");
+  s.textContent = msg || "";
+  s.classList.toggle("err", !!isErr);
+}
+
+function newId() {
+  return "n" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+}
+
+function reaches(from, to) {
+  var seen = {}, stack = [from];
+  while (stack.length) {
+    var id = stack.pop();
+    if (id === to) return true;
+    if (seen[id]) continue;
+    seen[id] = true;
+    (data.nodes[id].children || []).forEach(function (c) { stack.push(c); });
+  }
+  return false;
+}
+
+// Top-down layout. Each box sits one row below its lowest parent,
+// so a box reached by two routes sits below both.
+function layout() {
+  var ids = Object.keys(data.nodes);
+  var indeg = {}, depth = {}, parents = {};
+  ids.forEach(function (id) { indeg[id] = 0; depth[id] = 0; parents[id] = []; });
+  ids.forEach(function (id) {
+    (data.nodes[id].children || []).forEach(function (c) {
+      if (!data.nodes[c]) return;
+      indeg[c]++;
+      parents[c].push(id);
+    });
+  });
+  var queue = ids.filter(function (id) { return indeg[id] === 0; });
+  var order = [];
+  while (queue.length) {
+    var id = queue.shift();
+    order.push(id);
+    (data.nodes[id].children || []).forEach(function (c) {
+      if (!data.nodes[c]) return;
+      depth[c] = Math.max(depth[c], depth[id] + 1);
+      indeg[c]--;
+      if (indeg[c] === 0) queue.push(c);
+    });
+  }
+  var layers = [];
+  order.forEach(function (id) {
+    var d = depth[id];
+    (layers[d] = layers[d] || []).push(id);
+  });
+  var xIdx = {};
+  layers.forEach(function (layer, d) {
+    if (d > 0) {
+      var bary = {};
+      layer.forEach(function (id) {
+        var ps = parents[id];
+        bary[id] = ps.length
+          ? ps.reduce(function (s, p) { return s + xIdx[p]; }, 0) / ps.length
+          : 0;
+      });
+      layer.sort(function (a, b) { return bary[a] - bary[b]; });
+    }
+    layer.forEach(function (id, i) { xIdx[id] = i; });
+  });
+  var maxN = Math.max.apply(null, layers.map(function (l) { return l.length; }));
+  var totalW = maxN * (NW + GX) - GX;
+  var pos = {};
+  layers.forEach(function (layer, d) {
+    var rowW = layer.length * (NW + GX) - GX;
+    var off = (totalW - rowW) / 2;
+    layer.forEach(function (id, i) {
+      pos[id] = { x: PAD + off + i * (NW + GX), y: PAD + d * (NH + GY) };
+    });
+  });
+  return {
+    pos: pos,
+    width: totalW + PAD * 2,
+    height: layers.length * (NH + GY) - GY + PAD * 2
+  };
+}
+
+function drawEdges() {
+  var L = layout();
+  var svg = document.getElementById("edges");
+  svg.setAttribute("width", L.width);
+  svg.setAttribute("height", L.height);
+  svg.setAttribute("viewBox", "0 0 " + L.width + " " + L.height);
+  Array.prototype.slice.call(svg.querySelectorAll("path.edge")).forEach(function (p) { p.remove(); });
+
+  Object.keys(data.nodes).forEach(function (id) {
+    var n = data.nodes[id];
+    (n.children || []).forEach(function (cid) {
+      if (!data.nodes[cid] || !L.pos[cid] || !L.pos[id]) return;
+      var a = L.pos[id], b = L.pos[cid];
+      var x1 = a.x + NW / 2, y1 = a.y + NH, x2 = b.x + NW / 2, y2 = b.y;
+      var mid = (y2 - y1) / 2;
+      var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      var hot = id === selected || cid === selected;
+      p.setAttribute("class", "edge" + (hot ? (data.nodes[cid].kind === "end" ? " hot-end" : " hot") : ""));
+      p.setAttribute("d", "M" + x1 + " " + y1 + " C" + x1 + " " + (y1 + mid) + " " + x2 + " " + (y2 - mid) + " " + x2 + " " + y2);
+      p.setAttribute("marker-end", "url(#arr)");
+      p.style.color = hot ? "var(--accent)" : "var(--line)";
+      svg.appendChild(p);
+    });
+  });
+}
+
+// Full rebuild: only for structural changes (add, delete, load, kind change).
+function render() {
+  var L = layout();
+  var canvas = document.getElementById("canvas");
+  canvas.style.width = L.width + "px";
+  canvas.style.height = L.height + "px";
+  Array.prototype.slice.call(canvas.querySelectorAll(".node")).forEach(function (n) { n.remove(); });
+  drawEdges();
+
+  Object.keys(data.nodes).forEach(function (id) {
+    var n = data.nodes[id];
+    var el = document.createElement("div");
+    el.className = "node kind-" + n.kind;
+    if (id === selected) el.classList.add("selected");
+    if (linkFrom && id !== linkFrom) el.classList.add("target");
+    el.dataset.id = id;
+    el.style.width = NW + "px";
+    el.style.height = NH + "px";
+    el.style.left = L.pos[id].x + "px";
+    el.style.top = L.pos[id].y + "px";
+    var k = document.createElement("div");
+    k.className = "node-kind";
+    k.textContent = KIND_LABEL[n.kind] + (id === data.root ? " · start" : "");
+    el.appendChild(k);
+    var t = document.createElement("textarea");
+    t.value = n.text;
+    t.rows = 4;
+    t.placeholder = n.kind === "end" ? "How it ends" : "Write this box";
+    t.setAttribute("aria-label", KIND_LABEL[n.kind] + " box");
+    el.appendChild(t);
+    canvas.appendChild(el);
+  });
+  updateToolbar();
+}
+
+function markSelection() {
+  document.querySelectorAll(".node").forEach(function (n) {
+    var id = n.dataset.id;
+    n.classList.toggle("selected", id === selected);
+    n.classList.toggle("target", !!linkFrom && id !== linkFrom);
+  });
+  drawEdges();
+  updateToolbar();
+}
+
+function updateToolbar() {
+  var sel = selected && data.nodes[selected];
+  var kindOfSel = sel ? sel.kind : null;
+  document.querySelectorAll("[data-act]").forEach(function (b) {
+    var act = b.getAttribute("data-act");
+    if (act === "add") b.disabled = !sel || kindOfSel === "end";
+    if (act === "kind" || act === "link") b.disabled = !sel;
+    if (act === "delete") b.disabled = !sel || selected === data.root;
+    if (act === "link") b.classList.toggle("on", !!linkFrom);
+    if (act === "link") b.textContent = linkFrom ? "Cancel link" : "Link";
+    if (act === "delete") b.textContent = pendingDelete ? "Really delete?" : "Delete";
+  });
+}
+
+function select(id, focusText) {
+  selected = id;
+  pendingDelete = false;
+  if (focusText) {
+    render();
+    var el = document.querySelector('.node[data-id="' + id + '"] textarea');
+    if (el) el.focus();
+  } else {
+    markSelection();
+  }
+  reveal(id);
+}
+
+function addChild(kind) {
+  if (!selected) selected = data.root;
+  var parent = data.nodes[selected];
+  if (parent.kind === "end") { setStatus("An ending has no next box.", true); return; }
+  var id = newId();
+  data.nodes[id] = { id: id, kind: kind, text: "", children: [] };
+  parent.children.push(id);
+  save();
+  setStatus("Added. Type in the new box, or link to another.");
+  select(id, true);
+}
+
+function deleteSelected() {
+  if (!selected || selected === data.root) return;
+  if (!pendingDelete) {
+    pendingDelete = true;
+    setStatus("Press Really delete to remove this box and its arrows.");
+    updateToolbar();
+    return;
+  }
+  var id = selected;
+  delete data.nodes[id];
+  Object.keys(data.nodes).forEach(function (k) {
+    data.nodes[k].children = data.nodes[k].children.filter(function (c) { return c !== id; });
+  });
+  selected = data.root;
+  linkFrom = null;
+  pendingDelete = false;
+  save();
+  setStatus("Deleted.");
+  render();
+}
+
+function cycleKind() {
+  if (!selected) return;
+  var n = data.nodes[selected];
+  n.kind = KIND_NEXT[n.kind];
+  if (n.kind === "end") n.children = [];
+  save();
+  setStatus("Now a " + KIND_LABEL[n.kind] + " box.");
+  render();
+}
+
+function toggleLinkMode() {
+  if (linkFrom) { linkFrom = null; setStatus("Link cancelled."); markSelection(); return; }
+  if (!selected) return;
+  if (data.nodes[selected].kind === "end") { setStatus("An ending can't lead on.", true); return; }
+  linkFrom = selected;
+  setStatus("Tap a box to link it from this one. Tap a linked box to unlink.");
+  markSelection();
+}
+
+function tapBox(id) {
+  if (!linkFrom) { if (id !== selected) select(id, false); return; }
+  var from = linkFrom;
+  if (id === from) { linkFrom = null; setStatus("Link cancelled."); markSelection(); return; }
+  var src = data.nodes[from];
+  if (src.children.indexOf(id) !== -1) {
+    src.children = src.children.filter(function (c) { return c !== id; });
+    setStatus("Unlinked.");
+  } else if (reaches(id, from)) {
+    setStatus("That would loop back to an earlier box. Pick a later one.", true);
+    return;
+  } else {
+    src.children.push(id);
+    setStatus("Linked. Several routes can now meet in this box.");
+  }
+  linkFrom = null;
+  save();
+  selected = from;
+  markSelection();
+}
+
+function openSheet() {
+  document.getElementById("sheet-text").value = JSON.stringify(data, null, 2);
+  document.getElementById("sheet").hidden = false;
+}
+function closeSheet() { document.getElementById("sheet").hidden = true; }
+
+document.getElementById("canvas").addEventListener("click", function (e) {
+  var box = e.target.closest(".node");
+  if (!box) return;
+  tapBox(box.dataset.id);
+});
+document.getElementById("canvas").addEventListener("input", function (e) {
+  if (e.target.tagName !== "TEXTAREA") return;
+  var id = e.target.parentNode.dataset.id;
+  data.nodes[id].text = e.target.value;
+  save();
+});
+document.getElementById("canvas").addEventListener("focusin", function (e) {
+  var box = e.target.closest && e.target.closest(".node");
+  if (box && box.dataset.id !== selected && !linkFrom) {
+    selected = box.dataset.id;
+    pendingDelete = false;
+    markSelection();
+  }
+});
+
+document.querySelector(".toolbar").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-act]");
+  if (!b || b.disabled) return;
+  var act = b.getAttribute("data-act");
+  if (act === "add") addChild(b.getAttribute("data-kind"));
+  else if (act === "kind") cycleKind();
+  else if (act === "link") toggleLinkMode();
+  else if (act === "delete") deleteSelected();
+  else if (act === "io") openSheet();
+});
+document.getElementById("sheet").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-act]");
+  if (!b) return;
+  var act = b.getAttribute("data-act");
+  if (act === "close") closeSheet();
+  else if (act === "copy") {
+    var ta = document.getElementById("sheet-text");
+    var done = function () { setStatus("Copied."); };
+    try {
+      navigator.clipboard.writeText(ta.value).then(done, function () { ta.select(); setStatus("Press Ctrl or Cmd C to copy."); });
+    } catch (err) { ta.select(); setStatus("Press Ctrl or Cmd C to copy."); }
+  } else if (act === "load") {
+    try {
+      var d = JSON.parse(document.getElementById("sheet-text").value);
+      if (!d || !d.nodes || !d.nodes[d.root]) throw new Error("bad");
+      data = d;
+      selected = d.root;
+      linkFrom = null;
+      save();
+      closeSheet();
+      setStatus("Loaded.");
+      render();
+    } catch (err) {
+      setStatus("That text isn't a saved tree.", true);
+    }
+  }
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { if (linkFrom) { linkFrom = null; setStatus("Link cancelled."); markSelection(); } closeSheet(); }
+});
+
+sizeNodes();
+var resizeTimer = null;
+window.addEventListener("resize", function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () { sizeNodes(); render(); }, 150);
+});
+data = load();
+selected = data.root;
+render();
+setStatus("Tap the start box to begin. Type over the examples.");
+
+if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+  navigator.serviceWorker.register("sw.js").catch(function () {});
+}
+</script>
